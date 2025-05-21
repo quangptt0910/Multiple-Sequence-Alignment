@@ -1,6 +1,6 @@
 # Multiple Sequence Alignment (MSA) - Center Star Method
 
-## ![Bioinformatics](https://img.shields.io/badge/Bioinformatics-MSA-blue)
+#### *https://github.com/quangptt0910/Multiple-Sequence-Alignment*
 
 This repository provides an implementation of the Center Star Multiple Sequence Alignment (MSA) algorithm in Python. The Center Star method is a heuristic approach that constructs a multiple alignment by first computing all pairwise alignments, selecting the "center" sequence (the one with the highest sum of pairwise scores), and then merging the pairwise alignments into a final multiple alignment.
 
@@ -117,6 +117,7 @@ Statistics:
  ...
 ```
 ![related.png](related.png)
+
 ## **Unrelated** 
 *https://www.uniprot.org/uniref/UniRef50_A0A009MDJ4*
 ![related_result.png](related_result.png)
@@ -151,6 +152,7 @@ Statistics:
  ...
 ```
 ![unrelated.png](unrelated.png)
+
 ## Usage
 
 ```bash

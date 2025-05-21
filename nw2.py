@@ -24,10 +24,10 @@ def scoring_path(seq1, seq2, match=1, mismatch=-1, gap=-2):
             max_score = max(diag_score, up_score, left_score)
             path[i, j] = max_score
 
-            if max_score == up_score:
-                direction[i, j] = 1
             if max_score == left_score:
                 direction[i, j] = 2
+            if max_score == up_score:
+                direction[i, j] = 1
             if max_score == diag_score:
                 direction[i, j] = 0
 
@@ -104,8 +104,5 @@ def traceback_alignment(seq1, seq2, direction, match=1, mismatch=-1, gap=-2):
     # Reverse and join lists to get final strings
     return ''.join(aligned1[::-1]), ''.join(aligned2[::-1]), score
 
-def align_pair(seq1, seq2, match=1, mismatch=-1, gap=-2):  # Uses original alternatives
-    score_matrix, direction_matrix = scoring_path(seq1, seq2, match, mismatch, gap)
-    return traceback(seq1, seq2, direction_matrix)
 
 

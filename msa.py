@@ -195,53 +195,114 @@ def adjust(string_list, indices):
         string_list[idx] = s
 
 
+# def merge_alignments(center_idx, alignments, sequences, match=1, mismatch=-1, gap=-2):
+#     """
+#     Merge pairwise alignments into a multiple sequence alignment
+#
+#     Args:
+#         center_idx (int): Index of center sequence
+#         alignments (dict): Dictionary of pairwise alignments
+#         sequences (list): Original sequences
+#         match, mismatch, gap: Scoring parameters
+#
+#     Returns:
+#         list: Multiple sequence alignment
+#     """
+#     n = len(sequences)
+#     other_indices = [i for i in range(n) if i != center_idx]
+#
+#     # Start with the center sequence
+#     msa_rows = [sequences[center_idx]]
+#
+#     # Process other sequences in order
+#     for idx in other_indices:
+#         # Get pairwise alignment between center and current sequence
+#         if (center_idx, idx) in alignments:
+#             center_aligned, seq_aligned = alignments[(center_idx, idx)]
+#         else:
+#             center_aligned, seq_aligned = alignments[(idx, center_idx)]
+#
+#         # If this is the first sequence added to the MSA
+#         if len(msa_rows) == 1:
+#             msa_rows = [center_aligned, seq_aligned]
+#             continue
+#
+#         # Find positions where gaps need to be inserted
+#         ch_index1, ch_index2 = align_similar(msa_rows[0], center_aligned)
+#
+#         # Create copy of current MSA and the new sequence to add
+#         new_msa = msa_rows.copy()
+#         new_seq = [seq_aligned]
+#
+#         # Insert gaps in MSA and new sequence
+#         adjust(new_msa, ch_index1)
+#         adjust(new_seq, ch_index2)
+#
+#         # Add new sequence to MSA
+#         msa_rows = new_msa + new_seq
+#
+#     return msa_rows
+
 def merge_alignments(center_idx, alignments, sequences, match=1, mismatch=-1, gap=-2):
     """
     Merge pairwise alignments into a multiple sequence alignment
+
+    Uses center-star approach: progressively adds each sequence to the growing MSA by
+    reconciling gaps between the current center profile and new pairwise alignment.
 
     Args:
         center_idx (int): Index of center sequence
         alignments (dict): Dictionary of pairwise alignments
         sequences (list): Original sequences
-        match, mismatch, gap: Scoring parameters
+        match, mismatch, gap: Scoring parameters (unused here)
 
     Returns:
-        list: Multiple sequence alignment
+        list of str: Multiple sequence alignment ordered by original sequence indices
     """
-    n = len(sequences)
-    other_indices = [i for i in range(n) if i != center_idx]
-
-    # Start with the center sequence
-    msa_rows = [sequences[center_idx]]
-
-    # Process other sequences in order
-    for idx in other_indices:
-        # Get pairwise alignment between center and current sequence
-        if (center_idx, idx) in alignments:
-            center_aligned, seq_aligned = alignments[(center_idx, idx)]
-        else:
-            center_aligned, seq_aligned = alignments[(idx, center_idx)]
-
-        # If this is the first sequence added to the MSA
-        if len(msa_rows) == 1:
-            msa_rows = [center_aligned, seq_aligned]
+    # Gather pairwise alignments with center
+    pair_aligns = []  # tuples of (center_aln, seq_aln, idx)
+    for idx in range(len(sequences)):
+        if idx == center_idx:
             continue
+        key = (center_idx, idx) if (center_idx, idx) in alignments else (idx, center_idx)
+        a, b = alignments[key]
+        # Ensure a is center alignment
+        if key[0] == center_idx:
+            center_aln, seq_aln = a, b
+        else:
+            center_aln, seq_aln = b, a
+        pair_aligns.append((center_aln, seq_aln, idx))
 
-        # Find positions where gaps need to be inserted
-        ch_index1, ch_index2 = align_similar(msa_rows[0], center_aligned)
+    # If no other sequences, return solo center
+    if not pair_aligns:
+        return [sequences[center_idx]]
 
-        # Create copy of current MSA and the new sequence to add
-        new_msa = msa_rows.copy()
-        new_seq = [seq_aligned]
+    # Initialize MSA with first pair
+    first_center, first_seq, first_idx = pair_aligns[0]
+    msa_rows = [first_center, first_seq]
+    seq_order = [first_idx]
 
-        # Insert gaps in MSA and new sequence
-        adjust(new_msa, ch_index1)
-        adjust(new_seq, ch_index2)
+    # Add each remaining pair
+    for center_aln, seq_aln, idx in pair_aligns[1:]:
+        # Determine gap insertion positions to align current profile center and new center alignment
+        ch1, ch2 = align_similar(msa_rows[0], center_aln)
+        # Apply gaps to existing MSA rows
+        adjust(msa_rows, ch1)
+        # Apply gaps to the new sequence alignment
+        new_seq_list = [seq_aln]
+        adjust(new_seq_list, ch2)
+        # Append adjusted new sequence to MSA
+        msa_rows.append(new_seq_list[0])
+        seq_order.append(idx)
 
-        # Add new sequence to MSA
-        msa_rows = new_msa + new_seq
+    # Build final aligned list in original order
+    aligned = [''] * len(sequences)
+    aligned[center_idx] = msa_rows[0]
+    for i, idx in enumerate(seq_order, start=1):
+        aligned[idx] = msa_rows[i]
+    return aligned
 
-    return msa_rows
+
 
 def center_star_alignment(sequences, match=1, mismatch=-1, gap=-2):
     """
@@ -272,20 +333,23 @@ def center_star_alignment(sequences, match=1, mismatch=-1, gap=-2):
 
     return msa, score_matrix, center_idx
 
-
 def compute_alignment_statistics(msa):
     """
-    Compute statistics for the multiple sequence alignment.
+    Compute statistics for the multiple sequence alignment (MSA).
 
     Args:
-        msa (list): List of aligned sequences
+        msa (list of str): List of aligned sequences. Each sequence must have the same length.
 
     Returns:
-        dict: Dictionary with statistics
+        dict: A dictionary containing the statistics of the alignment.
     """
-    n = len(msa)
-    seq_length = len(msa[0])
+    if not msa or any(len(seq) != len(msa[0]) for seq in msa):
+        raise ValueError("All sequences in MSA must have the same length and cannot be empty.")
 
+    seq_length = len(msa[0])
+    n = len(msa)
+
+    # Initialize statistics
     stats = {
         "total_columns": seq_length,
         "identity_percentage": 0,
@@ -296,37 +360,41 @@ def compute_alignment_statistics(msa):
         "column_stats": []
     }
 
-    # Per-column analysis
-    for col in range(seq_length):
-        column = [seq[col] for seq in msa]
+    # Analyze each column in the alignment
+    for col_idx in range(seq_length):
+        column = [seq[col_idx] for seq in msa]
         gaps = column.count('-')
-        non_gaps = [c for c in column if c != '-']
+        residues = [res for res in column if res != '-']
 
-        if len(non_gaps) == 0:
-            continue
+        if residues:  # Ignore all-gap columns
+            # Calculate matches and mismatches
+            most_common_residue = max(set(residues), key=residues.count)
+            matches = residues.count(most_common_residue)
+            mismatches = len(residues) - matches
 
-        most_common = max(set(non_gaps), key=non_gaps.count)
-        matches = sum(1 for c in non_gaps if c == most_common)
-        mismatches = len(non_gaps) - matches
+            # Update overall stats
+            stats["gap_count"] += gaps
+            stats["match_count"] += matches
+            stats["mismatch_count"] += mismatches
 
-        stats['gap_count'] += gaps
-        stats['match_count'] += matches
-        stats['mismatch_count'] += mismatches
+            # Check for conserved column
+            if matches == len(residues) and gaps == 0:
+                stats["conserved_columns"] += 1
 
-        if matches == len(non_gaps) and gaps == 0:
-            stats['conserved_columns'] += 1
+            # Record per-column statistics
+            stats["column_stats"].append({
+                "position": col_idx + 1,
+                "gaps": gaps,
+                "matches": matches,
+                "mismatches": mismatches
+            })
 
-        stats['column_stats'].append({
-            'position': col + 1,
-            'gaps': gaps,
-            'matches': matches,
-            'mismatches': mismatches
-        })
+    # Calculate identity percentage
+    total_pairs = stats["match_count"] + stats["mismatch_count"]
+    stats["identity_percentage"] = (stats["match_count"] / total_pairs * 100) if total_pairs > 0 else 0
 
-    total_possible = n * (n - 1) / 2 * seq_length
-    stats['identity_percentage'] = (stats['match_count'] / (stats['match_count'] + stats['mismatch_count'])) * 100 \
-        if (stats['match_count'] + stats['mismatch_count']) > 0 else 0
     return stats
+
 
 def print_msa(msa, seq_names=None):
     """
@@ -389,23 +457,28 @@ def save_alignment_to_file(msa: List[str], params: Dict, stats: Dict, filename: 
     Save alignment with parameters and statistics to file
     """
     with open(filename, 'w') as f:
-        f.write("PROGRAM PARAMETERS:\n")
-        f.write(f"Match score: {params['match']}\n")
-        f.write(f"Mismatch score: {params['mismatch']}\n")
-        f.write(f"Gap penalty: {params['gap']}\n")
+        f.write("===== PROGRAM PARAMETERS =====\n\n")
+        f.write(f"\tMatch score: {params['match']}\n")
+        f.write(f"\tMismatch score: {params['mismatch']}\n")
+        f.write(f"\tGap penalty: {params['gap']}\n\n")
 
-        f.write("MULTIPLE SEQUENCE ALIGNMENT:\n")
-        max_name_len = max(len(name) for name in seq_names) if seq_names else 6
-        for i, seq in enumerate(msa):
-            name = seq_names[i] if seq_names else f"Seq {i + 1}"
-            wrapped_seq = textwrap.wrap(seq, 80)
-            for j, line in enumerate(wrapped_seq):
-                prefix = f"{name:{max_name_len}} " if j == 0 else " " * (max_name_len + 1)
-                f.write(f"{prefix}{line}\n")
+        f.write("SEQUENCE NAMES: \n")
+
+        if seq_names:
+            for name in seq_names:
+                f.write(f"\t{name}\n")
+        else:
+            for i in range(len(msa)):
+                f.write(f"\t{msa[i]}\n")
+
+        f.write("\nMULTIPLE SEQUENCE ALIGNMENT:\n")
+        # Write each aligned sequence on a single line
+        for seq in msa:
+            f.write(f"{seq}\n")
 
         f.write("\nSTATISTICS:\n")
-        f.write(f"Identity percentage: {stats['identity_percentage']:.2f}%\n")
-        f.write(f"Total matches: {stats['match_count']}\n")
-        f.write(f"Total mismatches: {stats['mismatch_count']}\n")
-        f.write(f"Total gaps: {stats['gap_count']}\n")
-        f.write(f"Alignment length: {stats['total_columns']}\n")
+        f.write(f"\tIdentity percentage: {stats['identity_percentage']:.2f}%\n")
+        f.write(f"\tTotal matches: {stats['match_count']}\n")
+        f.write(f"\tTotal mismatches: {stats['mismatch_count']}\n")
+        f.write(f"\tTotal gaps: {stats['gap_count']}\n")
+        f.write(f"\tAlignment length: {stats['total_columns']}\n")
