@@ -110,9 +110,9 @@ def example_star_alignment():
     sequences = [
         "ATTGCCATT",  # S1
         "ATGGCCATT",  # S2
-        "ATCCATTTTT",  # S3
+        "ATCCATTTTT", # S3
         "ATCTTCTT",  # S4
-        "ACTGACCT"  # S5
+        "ACTGACC"  # S5
     ]
     seq_names = ["S1", "S2", "S3", "S4", "S5"]
 
@@ -121,7 +121,7 @@ def example_star_alignment():
     for name, seq in zip(seq_names, sequences):
         print(f"{name}: {seq}")
 
-    scoring = get_scoring_scheme()
+    scoring = { 'match': 1, 'mismatch': -1, 'gap': -2 }
 
     # Perform alignment
     msa, score_matrix, center_idx = center_star_alignment(
@@ -137,6 +137,7 @@ def example_star_alignment():
 
     # Handle output
     handle_output(msa, scoring, stats, seq_names, "example_alignment.txt")
+
 def get_scoring_scheme(match=1, mismatch=-1, gap=-2):
     print("\nScoring Scheme Configuration:")
     return {

@@ -1,9 +1,12 @@
 import sys
+from itertools import combinations
+from multiprocessing import Pool
+
 import numpy as np
 from typing import List, Tuple, Dict
 import textwrap
 
-from nw2 import scoring_path2, traceback_alignment
+from nw2 import scoring_path, traceback_alignment
 
 def load_sequence_manual():
     """
@@ -63,11 +66,27 @@ def load_sequences_from_fasta(file_path):
         print(f"Error loading FASTA file: {str(e)}")
         return [], []
 
+def worker(params):
+    """
+    Worker function for parallel computation of pairwise alignments
+
+    Args:
+        params: Tuple of ((i, seq_i), (j, seq_j), (match, mismatch, gap))
+
+    Returns:
+        Tuple: ((i, j), (aligned_i, aligned_j, score))
+    """
+    (i, seq_i), (j, seq_j), scoring_params = params
+    match, mismatch, gap = scoring_params
+
+    score_table, direction = scoring_path(seq_i, seq_j, match, mismatch, gap)
+    aligned_i, aligned_j, score = traceback_alignment(seq_i, seq_j, direction, match, mismatch, gap)
+
+    return ((i, j), (aligned_i, aligned_j, score))
 
 def compute_all_pairwise_alignments(sequences, match=1, mismatch=-1, gap=-2):
     """
     Compute all pairwise alignments between sequences and their scores
-
     Args:
         sequences (list): List of sequences to align
         match (int): Score for matching
@@ -83,19 +102,20 @@ def compute_all_pairwise_alignments(sequences, match=1, mismatch=-1, gap=-2):
     score_matrix = np.zeros((n, n))
     alignment_pairs = {}
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            # Compute pairwise alignment
-            score_table, direction = scoring_path2(sequences[i], sequences[j], match=match, mismatch=mismatch, gap=gap)
+    # Create tasks for parallelization
+    tasks = []
+    for i, j in combinations(range(n), 2):
+        tasks.append(((i, sequences[i]), (j, sequences[j]), (match, mismatch, gap)))
 
-            # Get the alignment
-            aligned_i, aligned_j, score = traceback_alignment(sequences[i], sequences[j], direction)
+    # Parallel process
+    with Pool() as pool:
+        results = pool.map(worker, tasks)
 
-            score_matrix[i, j] = score
-            score_matrix[j, i] = score
-
-            alignment_pairs[(i, j)] = (aligned_i, aligned_j)
-            alignment_pairs[(j, i)] = (aligned_j, aligned_i)
+    # Result process
+    for (i, j), (aligned_i, aligned_j, score) in results:
+        alignment_pairs[(i, j)] = (aligned_i, aligned_j)
+        score_matrix[i, j] = score
+        score_matrix[j, i] = score
 
     return score_matrix, alignment_pairs
 
@@ -106,54 +126,122 @@ def find_center_sequence(score_matrix):
 
     Args:
         score_matrix (np.array): Matrix of alignment scores
-
     Returns:
         int: Index of center sequence
     """
     row_sums = np.sum(score_matrix, axis=1)
-    return np.argmax(row_sums)
+    center_idx = np.argmax(row_sums)
+    return int(center_idx)
 
 
-def merge_alignments(center_seq_idx, alignments, sequences):
+def align_similar(s1, s2):
     """
-    Correctly merges alignments with proper gap propagation
+    Find positions where gaps need to be inserted to make two sequences identical
+
+    Args:
+        s1 (str): First sequence
+        s2 (str): Second sequence
+
+    Returns:
+        tuple: (changes_for_s1, changes_for_s2) - indices where gaps need insertion
+    """
+    change1, change2 = [], []
+    i = 0
+
+    # Copy sequences to avoid modifying originals
+    s1_copy, s2_copy = s1, s2
+
+    while s1_copy != s2_copy:
+        if i >= len(s1_copy):
+            # Need to extend s1 with remainder of s2
+            s1_copy += s2_copy[i:]
+            change1.extend(range(i, i + len(s2_copy[i:])))
+            break
+
+        if i >= len(s2_copy):
+            # Need to extend s2 with remainder of s1
+            s2_copy += s1_copy[i:]
+            change2.extend(range(i, i + len(s1_copy[i:])))
+            break
+
+        if s1_copy[i] != s2_copy[i]:
+            if s1_copy[i] == '-':
+                # Insert gap in s2
+                s2_copy = s2_copy[:i] + '-' + s2_copy[i:]
+                change2.append(i)
+            else:
+                # Insert gap in s1
+                s1_copy = s1_copy[:i] + '-' + s1_copy[i:]
+                change1.append(i)
+
+        i += 1
+
+    return sorted(change1), sorted(change2)
+
+
+def adjust(string_list, indices):
+    """
+    Insert gaps at specified positions in all strings in a list
+
+    Args:
+        string_list (list): List of strings to modify
+        indices (list): Positions where gaps should be inserted
+    """
+    for idx in range(len(string_list)):
+        s = string_list[idx]
+        for pos in indices:
+            if pos <= len(s):
+                s = s[:pos] + '-' + s[pos:]
+        string_list[idx] = s
+
+
+def merge_alignments(center_idx, alignments, sequences, match=1, mismatch=-1, gap=-2):
+    """
+    Merge pairwise alignments into a multiple sequence alignment
+
+    Args:
+        center_idx (int): Index of center sequence
+        alignments (dict): Dictionary of pairwise alignments
+        sequences (list): Original sequences
+        match, mismatch, gap: Scoring parameters
+
+    Returns:
+        list: Multiple sequence alignment
     """
     n = len(sequences)
-    center_seq = sequences[center_seq_idx]
-    aligned_seqs = [list(center_seq)]  # Start with center sequence
+    other_indices = [i for i in range(n) if i != center_idx]
 
-    # Initialize all aligned sequences with gaps from the center's pairwise alignments
-    for i in range(n):
-        if i == center_seq_idx:
+    # Start with the center sequence
+    msa_rows = [sequences[center_idx]]
+
+    # Process other sequences in order
+    for idx in other_indices:
+        # Get pairwise alignment between center and current sequence
+        if (center_idx, idx) in alignments:
+            center_aligned, seq_aligned = alignments[(center_idx, idx)]
+        else:
+            center_aligned, seq_aligned = alignments[(idx, center_idx)]
+
+        # If this is the first sequence added to the MSA
+        if len(msa_rows) == 1:
+            msa_rows = [center_aligned, seq_aligned]
             continue
 
-        # Get pairwise alignment between center and sequence i
-        center_aligned, other_aligned = alignments[(center_seq_idx, i)]
+        # Find positions where gaps need to be inserted
+        ch_index1, ch_index2 = align_similar(msa_rows[0], center_aligned)
 
-        # Track gap positions to insert in all sequences
-        gap_positions = []
-        current_pos = 0
-        for c in center_aligned:
-            if c == '-':
-                gap_positions.append(current_pos)
-            else:
-                current_pos += 1
+        # Create copy of current MSA and the new sequence to add
+        new_msa = msa_rows.copy()
+        new_seq = [seq_aligned]
 
-        # Insert gaps into all existing sequences
-        for pos in reversed(gap_positions):
-            for seq in aligned_seqs:
-                seq.insert(pos, '-')
+        # Insert gaps in MSA and new sequence
+        adjust(new_msa, ch_index1)
+        adjust(new_seq, ch_index2)
 
-        # Add the newly aligned sequence
-        aligned_seqs.append(list(other_aligned))
+        # Add new sequence to MSA
+        msa_rows = new_msa + new_seq
 
-    # Ensure equal length
-    max_len = max(len(seq) for seq in aligned_seqs)
-    for seq in aligned_seqs:
-        while len(seq) < max_len:
-            seq.append('-')
-
-    return [''.join(seq) for seq in aligned_seqs]
+    return msa_rows
 
 def center_star_alignment(sequences, match=1, mismatch=-1, gap=-2):
     """
@@ -173,13 +261,14 @@ def center_star_alignment(sequences, match=1, mismatch=-1, gap=-2):
     """
     print("Computing pairwise alignments...")
     score_matrix, alignments = compute_all_pairwise_alignments(sequences, match, mismatch, gap)
+    print(f"Score matrix:\n{score_matrix}")
 
     print("Finding center sequence...")
     center_idx = find_center_sequence(score_matrix)
-    print(f"Center sequence is sequence #{center_idx + 1}")
+    print(f"Center sequence is sequence #{center_idx + 1} ({sequences[center_idx]})")
 
     print("Merging alignments...")
-    msa = merge_alignments(center_idx, alignments, sequences)
+    msa = merge_alignments(center_idx, alignments, sequences, match, mismatch, gap)
 
     return msa, score_matrix, center_idx
 
